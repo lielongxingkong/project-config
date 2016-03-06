@@ -1,0 +1,19 @@
+- defaults:
+    name: global
+    project-type: freestyle
+    concurrent: true
+
+- job:
+     name: testproject-unit-tests
+     defaults: global
+     builders:
+       - shell: |
+           zuul-cloner ssh://zuul@review.incloud-ci.com:29418 $ZUUL_PROJECT
+           cd $ZUUL_PROJECT
+           ./run_tests.sh
+
+- project:
+     name: openstack-dev/ci-sandbox
+     node: master
+     jobs:
+       - testproject-unit-tests
