@@ -31,7 +31,7 @@ pipelines:
       current-patchset: True
       approval:
         - verified: [1, 2]
-          username: zuul
+          username: jenkins
         - code-review: 2
     trigger:
       gerrit:
@@ -41,7 +41,7 @@ pipelines:
         - event: comment-added
           approval:
             - verified: 1
-          username: zuul
+          username: jenkins
     start:
       gerrit:
         verified: 0

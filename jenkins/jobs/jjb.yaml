@@ -8,7 +8,7 @@
      defaults: global
      builders:
        - shell: |
-           zuul-cloner ssh://zuul@review.incloud-ci.com:29418 $ZUUL_PROJECT
+           zuul-cloner ssh://jenkins@review.incloud-ci.com:29418 $ZUUL_PROJECT
            cd $ZUUL_PROJECT
            ./run_tests.sh
 
