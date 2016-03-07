@@ -3,6 +3,27 @@
     project-type: freestyle
     concurrent: true
 
+- publisher:
+    name: console-log
+    publishers:
+      - scp:
+          site: 'LogServer'
+          files:
+            - target: 'logs/$LOG_PATH'
+              copy-console: true
+              copy-after-failure: true
+
+- publisher:
+    name: devstack-logs
+    publishers:
+      - scp:
+          site: 'LogServer'
+          files:
+            - target: 'logs/$LOG_PATH'
+              source: 'logs/**'
+              keep-hierarchy: true
+              copy-after-failure: true
+
 - job:
      name: testproject-unit-tests
      defaults: global
@@ -17,3 +38,6 @@
      node: master
      jobs:
        - testproject-unit-tests
+     publishers:
+       - devstack-logs
+       - console-log
