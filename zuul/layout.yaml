@@ -55,7 +55,7 @@ pipelines:
 
 
 projects:
-  - name: openstack-dev/ci-sandbox
+  - name: incloud-ci/ci-sandbox
     check:
       - testproject-unit-tests
     gate:

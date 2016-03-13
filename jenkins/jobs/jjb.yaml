@@ -34,7 +34,7 @@
            ./run_tests.sh
 
 - project:
-     name: openstack-dev/ci-sandbox
+     name: incloud-ci/ci-sandbox
      node: master
      jobs:
        - testproject-unit-tests
