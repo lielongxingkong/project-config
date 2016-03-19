@@ -1,17 +1,20 @@
 pipelines:
   - name: check
     description: Newly uploaded patchsets enter this pipeline to receive an initial +/-1 Verified vote from Jenkins.
-    failure-message: Build failed.
+    success-message: Build succeeded (check pipeline).
+    failure-message: Build failed (check pipeline).
     manager: IndependentPipelineManager
-    precedence: low
+    source: gerrit
+    precedence: normal
     require:
       open: True
       current-patchset: True
     trigger:
       gerrit:
         - event: patchset-created
+        - event: change-restored
         - event: comment-added
-          comment: (?i)recheck
+          comment: (?i)^(Patch Set [0-9]+:)?( [\w\\+-]*)*(\n\n)?\s*(recheck|reverify)
     start:
       gerrit:
         verified: 0
@@ -23,9 +26,12 @@ pipelines:
         verified: -1
 
   - name: gate
-    description: Changes that have been approved by core developers are enqueued in order in this pipeline
+    description: Changes that have been approved by core developers are enqueued in order in this pipeline, and if they pass tests in Jenkins, will be merged.
+    success-message: Build succeeded (gate pipeline).
+    failure-message: Build failed (gate pipeline).
     manager: DependentPipelineManager
-    precedence: normal
+    source: gerrit
+    precedence: high
     require:
       open: True
       current-patchset: True
@@ -52,6 +58,344 @@ pipelines:
     failure:
       gerrit:
         verified: -2
+    window-floor: 20
+    window-increase-factor: 2
+
+  - name: post
+    description: This pipeline runs jobs that operate after each change is merged.
+    manager: IndependentPipelineManager
+    source: gerrit
+    precedence: low
+    trigger:
+      gerrit:
+        - event: ref-updated
+          ref: ^(?!refs/).*$
+
+  - name: release-post
+    description: This pipeline runs release-process-critical jobs that operate after specific changes are merged.
+    manager: IndependentPipelineManager
+    source: gerrit
+    precedence: high
+    trigger:
+      gerrit:
+        - event: ref-updated
+          ref: ^(?!refs/).*$
+
+  - name: tag
+    description: This pipeline runs jobs in response to any tag event.
+    manager: IndependentPipelineManager
+    source: gerrit
+    precedence: high
+    trigger:
+      gerrit:
+        - event: ref-updated
+          ref: ^refs/tags/.*$
+
+  - name: pre-release
+    description: This pipeline runs jobs on projects in response to pre-release tags.
+    manager: IndependentPipelineManager
+    source: gerrit
+    precedence: high
+    trigger:
+      gerrit:
+        - event: ref-updated
+          ref: ^refs/tags/[0-9]+(\.[0-9]+)*(a|b|rc)[0-9]+$
+
+  - name: release
+    description: When a commit is tagged as a release, this pipeline runs jobs that publish archives and documentation.
+    manager: IndependentPipelineManager
+    source: gerrit
+    precedence: high
+    trigger:
+      gerrit:
+        - event: ref-updated
+          ref: ^refs/tags/[0-9]+(\.[0-9]+)*$
+
+  - name: silent
+    description: This pipeline is used for silently testing new jobs.
+    manager: IndependentPipelineManager
+    source: gerrit
+    precedence: low
+    trigger:
+      gerrit:
+        - event: patchset-created
+        - event: comment-added
+          comment: (?i)^(Patch Set [0-9]+:)?( [\w\\+-]*)*(\n\n)?\s*(recheck|reverify)
+
+  - name: experimental
+    description: On-demand pipeline for requesting a run against a set of jobs that are not yet gating. Leave review comment of "check experimental" to run jobs in this pipeline.
+    success-message: Build succeeded (experimental pipeline).
+    failure-message: Build failed (experimental pipeline).
+    manager: IndependentPipelineManager
+    source: gerrit
+    precedence: normal
+    trigger:
+      gerrit:
+        - event: comment-added
+          comment: (?i)^(Patch Set [0-9]+:)?( [\w\\+-]*)*(\n\n)?\s*check experimental\s*$
+    success:
+      gerrit: {}
+    failure:
+      gerrit: {}
+
+  - name: periodic
+    description: Jobs in this queue are triggered on a timer.
+    manager: IndependentPipelineManager
+    source: gerrit
+    precedence: low
+    trigger:
+      timer:
+        - time: '0 6 * * *'
+
+  - name: periodic-stable
+    description: Periodic checks of the stable branches.
+    manager: IndependentPipelineManager
+    source: gerrit
+    precedence: low
+    trigger:
+      timer:
+        - time: '1 6 * * *'
+    failure:
+      smtp:
+        from: jenkins@openstack.org
+        to: openstack-stable-maint@lists.openstack.org
+        subject: 'Stable check of {change.project} failed'
+
+  - name: merge-check
+    description: >
+      Each time a change merges, this pipeline verifies that all open changes
+      on the same project are still mergeable.
+    failure-message: Build failed (merge-check pipeline).
+    manager: IndependentPipelineManager
+    ignore-dependencies: true
+    source: gerrit
+    precedence: low
+    require:
+      approval:
+        - verified: [1, 2]
+          username: jenkins
+    trigger:
+      zuul:
+        - event: project-change-merged
+    merge-failure:
+      gerrit:
+        verified: -1
+
+
+project-templates:
+  - name: merge-check
+    merge-check:
+      - noop
+
+  - name: bindep-fallback
+    check:
+      - gate-bindep-fallback-devstack-centos7
+      - gate-bindep-fallback-fedora-23
+      - gate-bindep-fallback-ubuntu-trusty
+    gate:
+      - gate-bindep-fallback-devstack-centos7
+      - gate-bindep-fallback-fedora-23
+      - gate-bindep-fallback-ubuntu-trusty
+
+  - name: python-jobs
+    check:
+      - 'gate-{name}-docs'
+      - 'gate-{name}-pep8'
+      - 'gate-{name}-python27'
+    gate:
+      - 'gate-{name}-docs'
+      - 'gate-{name}-pep8'
+      - 'gate-{name}-python27'
+    post:
+      - '{name}-branch-tarball'
+
+  # Invokes the same targets as python-jobs with one change:
+  # python27-db is used instead of python27. The job
+  # python27-db sets up databases.
+  - name: python-db-jobs
+    check:
+      - 'gate-{name}-docs'
+      - 'gate-{name}-pep8'
+      - 'gate-{name}-python27-db'
+    gate:
+      - 'gate-{name}-docs'
+      - 'gate-{name}-pep8'
+      - 'gate-{name}-python27-db'
+    post:
+      - '{name}-branch-tarball'
+
+  - name: python-charm-jobs
+    check:
+      - 'gate-{name}-pep8'
+      - 'gate-{name}-python27'
+    gate:
+      - 'gate-{name}-pep8'
+      - 'gate-{name}-python27'
+    post:
+      - '{name}-branch-tarball'
+
+  # This is the same template as python-jobs but uses the new
+  # linters target instead of pep8.
+  - name: python-jobs-linters
+    check:
+      - 'gate-{name}-docs'
+      - 'gate-{name}-linters'
+      - 'gate-{name}-python27'
+    gate:
+      - 'gate-{name}-docs'
+      - 'gate-{name}-linters'
+      - 'gate-{name}-python27'
+    post:
+      - '{name}-branch-tarball'
+
+  - name: integrated-gate
+    check:
+      - 'gate-tempest-dsvm-full'
+      - 'gate-tempest-dsvm-postgres-full'
+      - 'gate-tempest-dsvm-neutron-full'
+    gate:
+      - 'gate-tempest-dsvm-full'
+      - 'gate-tempest-dsvm-postgres-full'
+      - 'gate-tempest-dsvm-neutron-full'
+    experimental:
+      - gate-tempest-dsvm-full-dibtest
+      - gate-tempest-dsvm-neutron-full-dibtest
+      - gate-tempest-dsvm-multinode-full-dibtest
+
+  - name: lib-forward-testing
+    check:
+      - 'gate-tempest-dsvm-neutron-src-{name}'
+    gate:
+      - 'gate-tempest-dsvm-neutron-src-{name}'
+
+  - name: python3-jobs
+    check:
+      - 'gate-{name}-python34'
+    gate:
+      - 'gate-{name}-python34'
+
+  # Invokes the same targets as python3-jobs, but sets up databases.
+  - name: python3-db-jobs
+    check:
+      - 'gate-{name}-python34-db'
+    gate:
+      - 'gate-{name}-python34-db'
+
+  - name: osc-plugin-jobs
+    check:
+      - 'check-osc-plugins'
+
+  - name: pypy-jobs
+    check:
+      - 'gate-{name}-pypy'
+    # gate-.*-pypy is non-voting, therefore not added to any gate.
+    # Readd it once the job is voting again.
+    # gate:
+    #  - 'gate-{name}-pypy'
+
+  # Invokes the same targets as pypy-jobs, but sets up databases.
+  - name: pypy-db-jobs
+    check:
+      - 'gate-{name}-pypy-db'
+    # gate-.*-pypy is non-voting, therefore not added to any gate.
+    # Readd it once the job is voting again.
+    # gate:
+    #  - 'gate-{name}-pypy-db'
+
+  # This job needs to run on all repositories that are part of the
+  # global requirements syncing which is setup in the requirements
+  # repository. If a repository is in requirements/projects.txt, it
+  # has to run these jobs as voting as specified in
+  # http://docs.openstack.org/developer/requirements/#enforcement-in-projects
+  - name: check-requirements
+    check:
+      - 'gate-{name}-requirements'
+    gate:
+      - 'gate-{name}-requirements'
+
+  - name: periodic-liberty
+    periodic-stable:
+      - 'periodic-{name}-docs-liberty'
+      - 'periodic-{name}-python27-liberty'
+
+  - name: periodic-db-liberty
+    periodic-stable:
+      - 'periodic-{name}-docs-liberty'
+      - 'periodic-{name}-python27-db-liberty'
+
+  # Used for building documentation projects that contain
+  # DocBook XML and RST files.
+  - name: openstack-doc-gate
+    check:
+      - gate-{name}-tox-checklinks
+      - gate-{name}-tox-checkniceness
+      - gate-{name}-tox-checksyntax
+      - gate-{name}-tox-checkdeletions
+      - gate-{name}-tox-doc-publish-checkbuild
+    gate:
+      - gate-{name}-tox-checkniceness
+      - gate-{name}-tox-checksyntax
+      - gate-{name}-tox-checkdeletions
+      - gate-{name}-tox-doc-publish-checkbuild
+
+  # Publish pre-releases as wheels and official releases as sdist and
+  # wheels, then sync to all of the appropriate mirrors.
+  - name: publish-to-pypi
+    pre-release:
+      - '{name}-tarball':
+          - '{name}-pypi-wheel-upload'
+    release:
+      - '{name}-tarball':
+        - '{name}-pypi-both-upload':
+            - wheel-build-ubuntu-trusty-amd64:
+              - wheel-release-trustyx64
+            - '{name}-announce-release'
+
+  # Release OpenStack Server packages.
+  - name: openstack-server-release-jobs
+    pre-release:
+      - '{name}-tarball'
+    release:
+      - '{name}-tarball':
+        - '{name}-announce-release'
+      - '{name}-merge-release-tags'
+
+  - name: release-notes-jobs
+    check:
+      - 'gate-{name}-releasenotes'
+    gate:
+      - 'gate-{name}-releasenotes'
+    post:
+      - '{name}-releasenotes'
+    tag:
+      - '{name}-releasenotes'
+
+  # Note that we only publish specs by official
+  # teams on specs.o.o - the publish-specs job should not
+  # be used for projects not mentioned in governance repository.
+  # build-only-specs-jobs instead.
+  - name: openstack-specs-jobs
+    check:
+      - 'gate-{name}-docs'
+    gate:
+      - 'gate-{name}-docs'
+    post:
+      - '{name}-publish-specs'
+
+
+  # Same job as openstack-specs-job but does not publish to
+  # specs.openstack.org.
+  - name: build-only-specs-jobs
+    check:
+      - 'gate-{name}-docs'
+    gate:
+      - 'gate-{name}-docs'
+
+  - name: noop-jobs
+    check:
+      - noop
+    gate:
+      - noop
 
 
 projects:
